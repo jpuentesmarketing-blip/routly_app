@@ -14,17 +14,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final _supabase = Supabase.instance.client;
   final _fullNameController = TextEditingController();
   final _phoneController = TextEditingController();
+
   bool _isDriver = false;
   bool _isLoading = true;
   bool _isUpdating = false;
   List<dynamic> _userCommunities = [];
 
-  // Variables para la calificación y foto de perfil
   double _userRating = 5.0;
   int _totalRatings = 0;
   String? _avatarUrl;
-  
-  // Selector de imagen
+  String _completePhoneNumber = '';
+
   final ImagePicker _picker = ImagePicker();
 
   @override
@@ -36,16 +36,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _loadProfileAndCommunities() async {
     try {
       final user = _supabase.auth.currentUser;
-      if (user == null) return;
+      if (user == null) {
+        if (mounted) {
+          setState(() => _isLoading = false);
+        }
+        return;
+      }
 
-      // 1. Cargar perfil del usuario (incluyendo rating, total_ratings y avatar_url)
       final profileData = await _supabase
           .from('profiles')
           .select()
           .eq('id', user.id)
           .maybeSingle();
 
-      // 2. Cargar las comunidades y membresías del usuario
       final membershipsData = await _supabase
           .from('community_members')
           .select('status, is_admin, communities (name, invite_code)')
@@ -55,9 +58,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         setState(() {
           if (profileData != null) {
             _fullNameController.text = profileData['full_name'] ?? '';
-            
-            // Limpiamos el prefijo si ya viene guardado para evitar duplicarlo en IntlPhoneField
             String rawPhone = profileData['phone_number'] ?? '';
+            _completePhoneNumber = rawPhone;
             if (rawPhone.startsWith('+57')) {
               rawPhone = rawPhone.replaceFirst('+57', '');
             } else if (rawPhone.startsWith('+')) {
@@ -65,14 +67,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
             }
             _phoneController.text = rawPhone;
             _isDriver = profileData['is_driver'] ?? false;
-
-            // Extraer calificación, total de calificaciones y foto guardada
             _userRating = (profileData['rating'] as num?)?.toDouble() ?? 5.0;
             _totalRatings = (profileData['total_ratings'] as int?) ?? 0;
             _avatarUrl = profileData['avatar_url'];
           } else {
             _fullNameController.text = '';
             _phoneController.text = '';
+            _completePhoneNumber = '';
             _isDriver = false;
             _userRating = 5.0;
             _totalRatings = 0;
@@ -95,34 +96,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  // --- SELECCIONAR Y SUBIR FOTO AL BUCKET 'profiles' ---
   Future<void> _pickAndUploadImage() async {
     try {
       final XFile? image = await _picker.pickImage(
         source: ImageSource.gallery,
         imageQuality: 70,
       );
-
       if (image == null) return;
 
       setState(() => _isUpdating = true);
-
       final user = _supabase.auth.currentUser;
       if (user == null) return;
 
-      // Obtener la extensión de forma segura
       String fileExt = 'jpg';
       if (image.name.contains('.')) {
         fileExt = image.name.split('.').last.toLowerCase();
       }
-
-      final fileName = '${user.id}_${DateTime.now().millisecondsSinceEpoch}.$fileExt';
+      final fileName =
+          '${user.id}_${DateTime.now().millisecondsSinceEpoch}.$fileExt';
       final filePath = 'avatars/$fileName';
 
-      // Leer bytes de la imagen (compatible con Web y Móvil)
       final bytes = await image.readAsBytes();
 
-      // Subir archivo al bucket 'profiles' en Supabase Storage
       await _supabase.storage.from('profiles').uploadBinary(
             filePath,
             bytes,
@@ -132,19 +127,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           );
 
-      // Obtener la URL pública del archivo subido desde el bucket 'profiles'
       final publicUrl = _supabase.storage.from('profiles').getPublicUrl(filePath);
 
-      // Actualizar la URL en la tabla profiles de forma permanente
       await _supabase.from('profiles').update({
         'avatar_url': publicUrl,
       }).eq('id', user.id);
 
-      setState(() {
-        _avatarUrl = publicUrl;
-      });
-
       if (mounted) {
+        setState(() {
+          _avatarUrl = publicUrl;
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('¡Foto de perfil actualizada con éxito!'),
@@ -172,16 +164,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final user = _supabase.auth.currentUser;
       if (user == null) return;
 
-      // Se utiliza upsert para insertar o actualizar el registro asegurando los datos del formulario
+      final phoneToSave = _completePhoneNumber.trim().isNotEmpty
+          ? _completePhoneNumber.trim()
+          : _phoneController.text.trim();
+
       await _supabase.from('profiles').upsert({
         'id': user.id,
         'full_name': _fullNameController.text.trim(),
-        'phone_number': _phoneController.text.trim(),
+        'phone_number': phoneToSave,
         'is_driver': _isDriver,
       });
 
       await _loadProfileAndCommunities();
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -228,18 +222,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // --- SECCIÓN FOTO DE PERFIL CON BOTÓN DE CÁMARA ---
                   Center(
                     child: Stack(
                       children: [
                         CircleAvatar(
                           radius: 50,
                           backgroundColor: Colors.teal.shade100,
-                          backgroundImage: _avatarUrl != null && _avatarUrl!.isNotEmpty
-                              ? NetworkImage(_avatarUrl!)
-                              : null,
+                          backgroundImage:
+                              _avatarUrl != null && _avatarUrl!.isNotEmpty
+                                  ? NetworkImage(_avatarUrl!)
+                                  : null,
                           child: _avatarUrl == null || _avatarUrl!.isEmpty
-                              ? const Icon(Icons.person, size: 50, color: Colors.teal)
+                              ? const Icon(
+                                  Icons.person,
+                                  size: 50,
+                                  color: Colors.teal,
+                                )
                               : null,
                         ),
                         Positioned(
@@ -250,7 +248,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             radius: 16,
                             child: IconButton(
                               padding: EdgeInsets.zero,
-                              icon: const Icon(Icons.camera_alt, size: 16, color: Colors.white),
+                              icon: const Icon(
+                                Icons.camera_alt,
+                                size: 16,
+                                color: Colors.white,
+                              ),
                               onPressed: _pickAndUploadImage,
                               tooltip: 'Cambiar foto de perfil',
                             ),
@@ -266,7 +268,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     style: const TextStyle(color: Colors.grey, fontSize: 14),
                   ),
                   const SizedBox(height: 8),
-                  // --- SECCIÓN DE CALIFICACIÓN DEL USUARIO ---
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -292,7 +293,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  // Selector de país y teléfono internacional sin duplicar prefijos
                   IntlPhoneField(
                     controller: _phoneController,
                     decoration: const InputDecoration(
@@ -301,7 +301,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                     initialCountryCode: 'CO',
                     onChanged: (phone) {
-                      _phoneController.text = phone.completeNumber;
+                      _completePhoneNumber = phone.completeNumber;
                     },
                   ),
                   const SizedBox(height: 16),
@@ -357,17 +357,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           itemBuilder: (context, index) {
                             final membership = _userCommunities[index];
                             final community = membership['communities'] ?? {};
-                            final communityName = community['name'] ?? 'Comunidad';
+                            final communityName =
+                                community['name'] ?? 'Comunidad';
                             final inviteCode = community['invite_code'] ?? '';
                             final status = membership['status'] ?? 'pending';
                             final isAdmin = membership['is_admin'] ?? false;
-                            
+
                             Color statusColor = Colors.orange;
                             String statusLabel = 'Pendiente';
-                            
                             if (status == 'approved') {
-                              statusColor = isAdmin ? Colors.purple : Colors.teal;
-                              statusLabel = isAdmin ? 'Administrador' : 'Miembro Activo';
+                              statusColor =
+                                  isAdmin ? Colors.purple : Colors.teal;
+                              statusLabel = isAdmin
+                                  ? 'Administrador'
+                                  : 'Miembro Activo';
                             } else if (status == 'rejected') {
                               statusColor = Colors.red;
                               statusLabel = 'Rechazado';
@@ -378,21 +381,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               margin: const EdgeInsets.only(bottom: 8),
                               child: ListTile(
                                 leading: CircleAvatar(
-                                  backgroundColor: statusColor.withValues(alpha: 0.15),
+                                  backgroundColor:
+                                      statusColor.withValues(alpha: 0.15),
                                   child: Icon(
-                                    isAdmin ? Icons.admin_panel_settings : Icons.group,
+                                    isAdmin
+                                        ? Icons.admin_panel_settings
+                                        : Icons.group,
                                     color: statusColor,
                                   ),
                                 ),
                                 title: Text(
                                   communityName,
-                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
                                 subtitle: Text(
                                   'Rol: $statusLabel ${inviteCode.isNotEmpty ? "(Código: $inviteCode)" : ""}',
                                 ),
                                 trailing: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
                                   decoration: BoxDecoration(
                                     color: statusColor.withValues(alpha: 0.1),
                                     borderRadius: BorderRadius.circular(6),
@@ -412,18 +423,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           },
                         ),
                   const SizedBox(height: 24),
-                  // --- SECCIÓN 1: Preguntas Frecuentes y Soporte Técnico ---
                   Card(
                     elevation: 1,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8),
                       side: BorderSide(color: Colors.teal.shade200),
                     ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12.0),
+                    child: const Padding(
+                      padding: EdgeInsets.all(12.0),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        children: const [
+                        children: [
                           Row(
                             children: [
                               Icon(Icons.help_outline, color: Colors.teal),
@@ -441,7 +451,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           SizedBox(height: 6),
                           Text(
                             'Soporte técnico del app:',
-                            style: TextStyle(fontSize: 13, color: Colors.black87),
+                            style:
+                                TextStyle(fontSize: 13, color: Colors.black87),
                           ),
                           SizedBox(height: 2),
                           Text(
@@ -476,7 +487,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   const SizedBox(height: 24),
                   const Divider(),
                   const SizedBox(height: 8),
-                  // --- SECCIÓN 2: Derechos de Autor y Marca Protegida ---
                   Text(
                     '© ${DateTime.now().year} GENOLAB SAS. Todos los derechos reservados.',
                     textAlign: TextAlign.center,

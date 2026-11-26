@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ManageCommunityScreen extends StatefulWidget {
-  final String communityld;
-  const ManageCommunityScreen({super.key, required this.communityld});
+  final String communityId;
+  const ManageCommunityScreen({super.key, required this.communityId});
 
   @override
   State<ManageCommunityScreen> createState() => _ManageCommunityScreenState();
@@ -22,34 +22,32 @@ class _ManageCommunityScreenState extends State<ManageCommunityScreen> {
 
   Future<void> _loadPendingRequests() async {
     try {
+      if (!mounted) return;
       setState(() => isLoading = true);
 
-      // 1. Consultar las membresías pendientes para esta comunidad
       final membersResponse = await supabase
           .from('community_members')
-          .select('id, status, user_id')
-          .eq('community_id', widget.communityld)
+          .select('id, status, user_id, request_message')
+          .eq('community_id', widget.communityId)
           .eq('status', 'pending');
 
       List<dynamic> loadedMembers = [];
-
-      // 2. Obtener el nombre del perfil para cada usuario solicitante
       for (var member in membersResponse) {
         final userId = member['user_id'];
         Map<String, dynamic> profileData = {'full_name': 'Usuario'};
-
         try {
           final profileResponse = await supabase
               .from('profiles')
               .select('full_name')
               .eq('id', userId)
               .maybeSingle();
-
           if (profileResponse != null) {
             profileData = profileResponse;
           }
         } catch (profileError) {
-          debugPrint('No se pudo cargar el perfil para $userId: $profileError');
+          debugPrint(
+            'No se pudo cargar el perfil para $userId: $profileError',
+          );
         }
 
         loadedMembers.add({
@@ -58,12 +56,14 @@ class _ManageCommunityScreenState extends State<ManageCommunityScreen> {
         });
       }
 
+      if (!mounted) return;
       setState(() {
         pendingMembers = loadedMembers;
         isLoading = false;
       });
     } catch (e) {
       debugPrint('Error al cargar solicitudes: $e');
+      if (!mounted) return;
       setState(() => isLoading = false);
     }
   }
@@ -86,7 +86,7 @@ class _ManageCommunityScreenState extends State<ManageCommunityScreen> {
           backgroundColor: newStatus == 'approved' ? Colors.teal : Colors.red,
         ),
       );
-      _loadPendingRequests();
+      await _loadPendingRequests();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -126,6 +126,8 @@ class _ManageCommunityScreenState extends State<ManageCommunityScreen> {
                         ? (profile['full_name'] ?? 'Usuario')
                         : 'Usuario';
                     final membershipId = member['id'];
+                    final requestMessage =
+                        (member['request_message'] ?? '').toString().trim();
 
                     return Card(
                       elevation: 2,
@@ -133,35 +135,89 @@ class _ManageCommunityScreenState extends State<ManageCommunityScreen> {
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: ListTile(
-                        leading: const CircleAvatar(
-                          backgroundColor: Colors.teal,
-                          child: Icon(Icons.person, color: Colors.white),
-                        ),
-                        title: Text(
-                          userName,
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        subtitle: const Text(
-                          'Solicita unirse a la comunidad',
-                          style: TextStyle(fontSize: 12),
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            IconButton(
-                              icon: const Icon(Icons.check_circle,
-                                  color: Colors.teal, size: 28),
-                              tooltip: 'Aprobar',
-                              onPressed: () =>
-                                  _updateMemberStatus(membershipId, 'approved'),
+                            Row(
+                              children: [
+                                const CircleAvatar(
+                                  backgroundColor: Colors.teal,
+                                  child: Icon(Icons.person, color: Colors.white),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        userName.toString(),
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 15,
+                                        ),
+                                      ),
+                                      const Text(
+                                        'Solicita unirse a la comunidad',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.check_circle,
+                                    color: Colors.teal,
+                                    size: 28,
+                                  ),
+                                  tooltip: 'Aprobar',
+                                  onPressed: () => _updateMemberStatus(
+                                    membershipId.toString(),
+                                    'approved',
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.cancel,
+                                    color: Colors.red,
+                                    size: 28,
+                                  ),
+                                  tooltip: 'Rechazar',
+                                  onPressed: () => _updateMemberStatus(
+                                    membershipId.toString(),
+                                    'rejected',
+                                  ),
+                                ),
+                              ],
                             ),
-                            IconButton(
-                              icon: const Icon(Icons.cancel,
-                                  color: Colors.red, size: 28),
-                              tooltip: 'Rechazar',
-                              onPressed: () =>
-                                  _updateMemberStatus(membershipId, 'rejected'),
+                            const SizedBox(height: 10),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: Colors.teal.shade50,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.teal.shade100),
+                              ),
+                              child: Text(
+                                requestMessage.isNotEmpty
+                                    ? 'Identificación / Mensaje: "$requestMessage"'
+                                    : 'Sin mensaje de presentación adicional.',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: requestMessage.isNotEmpty
+                                      ? Colors.black87
+                                      : Colors.grey.shade700,
+                                  fontStyle: requestMessage.isNotEmpty
+                                      ? FontStyle.normal
+                                      : FontStyle.italic,
+                                ),
+                              ),
                             ),
                           ],
                         ),

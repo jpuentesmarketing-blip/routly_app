@@ -1,5 +1,5 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl_phone_field/intl_phone_field.dart';
 import '../data/auth_repository.dart';
@@ -18,14 +18,175 @@ class _LoginScreenState extends State<LoginScreen> {
   final _passwordController = TextEditingController();
   final _fullNameController = TextEditingController();
   final _phoneController = TextEditingController();
-  
-  bool _isDriver = false;
+
   bool _obscurePassword = true;
-  bool _dataPrivacyAccepted = false; // Variable obligatoria para la política de datos
-  
+  bool _dataPrivacyAccepted = false;
+
   final _authRepository = AuthRepository();
   bool _isLoading = false;
   bool _isRegistering = false;
+
+  StreamSubscription<AuthState>? _authSubscription;
+  bool _isResetDialogOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _authSubscription =
+        Supabase.instance.client.auth.onAuthStateChange.listen((data) {
+      if (data.event == AuthChangeEvent.passwordRecovery &&
+          mounted &&
+          !_isResetDialogOpen) {
+        _showNewPasswordDialog();
+      }
+    });
+  }
+
+  Future<void> _showNewPasswordDialog() async {
+    if (!mounted || _isResetDialogOpen) return;
+    _isResetDialogOpen = true;
+
+    final newPasswordController = TextEditingController();
+    final confirmPasswordController = TextEditingController();
+    bool isSaving = false;
+
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          return StatefulBuilder(
+            builder: (context, setDialogState) {
+              return AlertDialog(
+                title: const Text('Nueva contraseña'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Escribe tu nueva contraseña para completar la recuperación.',
+                      style: TextStyle(fontSize: 14, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: newPasswordController,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Nueva contraseña',
+                        prefixIcon: Icon(Icons.lock_outline),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: confirmPasswordController,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Confirmar contraseña',
+                        prefixIcon: Icon(Icons.lock_outline),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: isSaving
+                        ? null
+                        : () {
+                            if (dialogContext.mounted) {
+                              Navigator.of(dialogContext).pop();
+                            }
+                          },
+                    child: const Text(
+                      'Cancelar',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  ),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.teal,
+                      foregroundColor: Colors.white,
+                    ),
+                    onPressed: isSaving
+                        ? null
+                        : () async {
+                            final pass = newPasswordController.text.trim();
+                            final confirm =
+                                confirmPasswordController.text.trim();
+
+                            if (pass.length < 6) {
+                              if (!dialogContext.mounted) return;
+                              ScaffoldMessenger.of(dialogContext).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'La contraseña debe tener al menos 6 caracteres.',
+                                  ),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                              return;
+                            }
+
+                            if (pass != confirm) {
+                              if (!dialogContext.mounted) return;
+                              ScaffoldMessenger.of(dialogContext).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Las contraseñas no coinciden.'),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                              return;
+                            }
+
+                            setDialogState(() => isSaving = true);
+                            try {
+                              await Supabase.instance.client.auth.updateUser(
+                                UserAttributes(password: pass),
+                              );
+                              if (!mounted || !dialogContext.mounted) return;
+                              Navigator.of(dialogContext).pop();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    '¡Contraseña actualizada! Ya puedes iniciar sesión.',
+                                  ),
+                                  backgroundColor: Colors.teal,
+                                ),
+                              );
+                            } catch (e) {
+                              if (!mounted || !dialogContext.mounted) return;
+                              setDialogState(() => isSaving = false);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Error al actualizar: $e'),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
+                          },
+                    child: isSaving
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Text('Guardar'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      newPasswordController.dispose();
+      confirmPasswordController.dispose();
+      _isResetDialogOpen = false;
+    }
+  }
 
   Future<void> _handleAuth() async {
     setState(() => _isLoading = true);
@@ -38,9 +199,10 @@ class _LoginScreenState extends State<LoginScreen> {
           throw const AuthException('Por favor completa todos los campos.');
         }
 
-        // Validación obligatoria de la política de tratamiento de datos (Ley 1581)
         if (!_dataPrivacyAccepted) {
-          throw const AuthException('Debes aceptar la Política de Privacidad y el tratamiento de datos personales para registrarte.');
+          throw const AuthException(
+            'Debes aceptar la Política de Privacidad y el tratamiento de datos personales para registrarte.',
+          );
         }
 
         await _authRepository.signUp(
@@ -48,7 +210,7 @@ class _LoginScreenState extends State<LoginScreen> {
           password: _passwordController.text.trim(),
           fullName: _fullNameController.text.trim(),
           phoneNumber: _phoneController.text.trim(),
-          isDriver: _isDriver,
+          isDriver: false,
           dataPrivacyAccepted: _dataPrivacyAccepted,
         );
 
@@ -91,79 +253,119 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       );
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
   void _showForgotPasswordDialog() {
     final resetController = TextEditingController();
-    showDialog(
+    bool isSending = false;
+
+    showDialog<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Recuperar contraseña'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'Ingresa tu correo electrónico y te enviaremos las instrucciones.',
-              style: TextStyle(fontSize: 14, color: Colors.grey),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: resetController,
-              decoration: const InputDecoration(
-                labelText: 'Correo electrónico',
-                prefixIcon: Icon(Icons.email_outlined),
-                border: OutlineInputBorder(),
-              ),
-              keyboardType: TextInputType.emailAddress,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancelar', style: TextStyle(color: Colors.grey)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.teal,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () async {
-              final email = resetController.text.trim();
-              if (email.isEmpty) return;
-              final nav = Navigator.of(dialogContext);
-              final messenger = ScaffoldMessenger.of(context);
-              try {
-                await Supabase.instance.client.auth.resetPasswordForEmail(
-                  email,
-                  redirectTo: kIsWeb
-                      ? 'http://localhost:3000/'
-                      : 'io.supabase.routly://reset-password/',
-                );
-                nav.pop();
-                messenger.showSnackBar(
-                  const SnackBar(
-                    content: Text('¡Correo de recuperación enviado!'),
-                    backgroundColor: Colors.teal,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Recuperar contraseña'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Ingresa tu correo electrónico y te enviaremos las instrucciones.',
+                    style: TextStyle(fontSize: 14, color: Colors.grey),
                   ),
-                );
-              } catch (e) {
-                messenger.showSnackBar(
-                  SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-                );
-              }
-            },
-            child: const Text('Enviar'),
-          ),
-        ],
-      ),
-    );
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: resetController,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: const InputDecoration(
+                      labelText: 'Correo electrónico',
+                      prefixIcon: Icon(Icons.email_outlined),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSending
+                      ? null
+                      : () {
+                          if (dialogContext.mounted) {
+                            Navigator.of(dialogContext).pop();
+                          }
+                        },
+                  child: const Text(
+                    'Cancelar',
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.teal,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: isSending
+                      ? null
+                      : () async {
+                          final email = resetController.text.trim();
+                          if (email.isEmpty) return;
+
+                          setDialogState(() => isSending = true);
+                          try {
+                            await Supabase.instance.client.auth
+                                .resetPasswordForEmail(
+                              email,
+                              redirectTo: 'io.supabase.routly://reset-password/',
+                            );
+                            if (!mounted || !dialogContext.mounted) return;
+                            Navigator.of(dialogContext).pop();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  '¡Correo de recuperación enviado!',
+                                ),
+                                backgroundColor: Colors.teal,
+                              ),
+                            );
+                          } catch (e) {
+                            if (!mounted || !dialogContext.mounted) return;
+                            setDialogState(() => isSending = false);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Error: $e'),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
+                          }
+                        },
+                  child: isSending
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text('Enviar'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    ).whenComplete(() {
+      resetController.dispose();
+    });
   }
 
   @override
   void dispose() {
+    _authSubscription?.cancel();
     _emailController.dispose();
     _passwordController.dispose();
     _fullNameController.dispose();
@@ -222,30 +424,21 @@ class _LoginScreenState extends State<LoginScreen> {
                     _phoneController.text = phone.completeNumber;
                   },
                 ),
-                const SizedBox(height: 8),
-                SwitchListTile(
-                  title: const Text('¿Registrarse como Conductor?'),
-                  subtitle: const Text('Podrás ofrecer viajes a tu comunidad'),
-                  value: _isDriver,
-                  activeThumbColor: Colors.teal,
-                  onChanged: (bool value) {
-                    setState(() => _isDriver = value);
-                  },
-                ),
                 const SizedBox(height: 16),
               ],
               TextField(
                 controller: _emailController,
+                keyboardType: TextInputType.emailAddress,
                 decoration: const InputDecoration(
                   labelText: 'Correo electrónico',
                   prefixIcon: Icon(Icons.email_outlined),
                   border: OutlineInputBorder(),
                 ),
-                keyboardType: TextInputType.emailAddress,
               ),
               const SizedBox(height: 16),
               TextField(
                 controller: _passwordController,
+                obscureText: _obscurePassword,
                 decoration: InputDecoration(
                   labelText: 'Contraseña',
                   prefixIcon: const Icon(Icons.lock_outline),
@@ -262,15 +455,15 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   border: const OutlineInputBorder(),
                 ),
-                obscureText: _obscurePassword,
               ),
               const SizedBox(height: 8),
-              
-              // --- CHECKBOX DE POLÍTICA DE PRIVACIDAD Y DATOS (SÓLO EN REGISTRO) ---
               if (_isRegistering) ...[
                 const SizedBox(height: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.teal.shade50,
                     borderRadius: BorderRadius.circular(8),
@@ -283,7 +476,11 @@ class _LoginScreenState extends State<LoginScreen> {
                     contentPadding: EdgeInsets.zero,
                     title: const Text(
                       'Acepto la Política de Privacidad y el tratamiento de datos personales según la ley (GENOLAB SAS).',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.black87),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black87,
+                      ),
                     ),
                     onChanged: (bool? value) {
                       setState(() {
@@ -292,9 +489,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     },
                   ),
                 ),
-                const SizedBox(height: 16),
               ],
-
               if (!_isRegistering)
                 Align(
                   alignment: Alignment.centerRight,
@@ -309,7 +504,7 @@ class _LoginScreenState extends State<LoginScreen> {
               const SizedBox(height: 16),
               if (_isLoading)
                 const Center(child: CircularProgressIndicator())
-              else ...[
+              else
                 ElevatedButton(
                   onPressed: _handleAuth,
                   style: ElevatedButton.styleFrom(
@@ -322,22 +517,19 @@ class _LoginScreenState extends State<LoginScreen> {
                     style: const TextStyle(fontSize: 16),
                   ),
                 ),
-                const SizedBox(height: 12),
-                TextButton(
-                  onPressed: () {
-                    setState(() => _isRegistering = !_isRegistering);
-                  },
-                  child: Text(
-                    _isRegistering
-                        ? '¿Ya tienes cuenta? Inicia sesión aquí'
-                        : '¿No tienes cuenta? Regístrate aquí',
-                    style: const TextStyle(color: Colors.teal),
-                  ),
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: () {
+                  setState(() => _isRegistering = !_isRegistering);
+                },
+                child: Text(
+                  _isRegistering
+                      ? '¿Ya tienes cuenta? Inicia sesión aquí'
+                      : '¿No tienes cuenta? Regístrate aquí',
+                  style: const TextStyle(color: Colors.teal),
                 ),
-              ],
-              
+              ),
               const SizedBox(height: 24),
-              // --- FOOTER LEGAL DE GENOLAB SAS ---
               const LegalFooter(showSupport: true),
             ],
           ),

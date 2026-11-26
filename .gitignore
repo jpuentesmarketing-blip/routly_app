@@ -46,3 +46,10 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Variables de entorno y certificados sensibles
+.env
+.env.*
+*.p8
+*.p12
+*.mobileprovision

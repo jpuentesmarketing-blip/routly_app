@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 class PublishTripScreen extends StatefulWidget {
   final Map<String, dynamic>? tripData;
+
   const PublishTripScreen({super.key, this.tripData});
 
   @override
@@ -19,13 +20,12 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
   late final TextEditingController _vehicleBrandController;
   late final TextEditingController _vehicleColorController;
   late final TextEditingController _tripNotesController;
-  
+
   DateTime? _selectedDate;
   TimeOfDay? _selectedTime;
   bool _isLoading = false;
   bool _isLoadingCommunities = true;
-  
-  // Variables para comunidades
+
   String? _selectedCommunityId;
   List<dynamic> _approvedCommunities = [];
 
@@ -36,47 +36,99 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
     super.initState();
     final data = widget.tripData;
     _originController = TextEditingController(text: data?['origin'] ?? '');
-    _destinationController = TextEditingController(text: data?['destination'] ?? '');
-    _meetingPointController = TextEditingController(text: data?['meeting_point'] ?? '');
-    _seatsController = TextEditingController(text: (data?['available_seats'] ?? 3).toString());
-    _costController = TextEditingController(text: (data?['total_cost'] ?? '').toString());
-    _vehicleBrandController = TextEditingController(text: data?['vehicle_brand'] ?? '');
-    _vehicleColorController = TextEditingController(text: data?['vehicle_color'] ?? '');
-    _tripNotesController = TextEditingController(text: data?['trip_notes'] ?? '');
+    _destinationController =
+        TextEditingController(text: data?['destination'] ?? '');
+    _meetingPointController =
+        TextEditingController(text: data?['meeting_point'] ?? '');
+    _seatsController = TextEditingController(
+      text: (data?['available_seats'] ?? 3).toString(),
+    );
+    _costController = TextEditingController(
+      text: (data?['total_cost'] ?? '').toString(),
+    );
+    _vehicleBrandController =
+        TextEditingController(text: data?['vehicle_brand'] ?? '');
+    _vehicleColorController =
+        TextEditingController(text: data?['vehicle_color'] ?? '');
+    _tripNotesController =
+        TextEditingController(text: data?['trip_notes'] ?? '');
     _selectedCommunityId = data?['community_id']?.toString();
 
     if (data != null && data['departure_time'] != null) {
       try {
-        final dt = DateTime.parse(data['departure_time']);
+        final dt = DateTime.parse(data['departure_time'].toString());
         _selectedDate = dt;
         _selectedTime = TimeOfDay(hour: dt.hour, minute: dt.minute);
       } catch (_) {}
     }
+
     _loadUserCommunities();
   }
 
   Future<void> _loadUserCommunities() async {
     try {
       final user = _supabase.auth.currentUser;
-      if (user == null) return;
+      if (user == null) {
+        if (mounted) {
+          setState(() {
+            _approvedCommunities = [];
+            _selectedCommunityId = null;
+            _isLoadingCommunities = false;
+          });
+        }
+        return;
+      }
 
       final response = await _supabase
           .from('community_members')
-          .select('community_id, communities (id, name)')
+          .select('community_id, communities (id, name, is_active)')
           .eq('user_id', user.id)
           .eq('status', 'approved');
 
+      final activeOnly = [];
+      for (final item in response) {
+        final comm = item['communities'];
+        if (comm is Map) {
+          final isActive = comm['is_active'] ?? true;
+          if (isActive == true) {
+            activeOnly.add(item);
+          }
+        }
+      }
+
+      if (!mounted) return;
       setState(() {
-        _approvedCommunities = response;
+        _approvedCommunities = activeOnly;
         _isLoadingCommunities = false;
-        // Si no estamos editando y hay comunidades, seleccionamos la primera por defecto
-        if (_selectedCommunityId == null && _approvedCommunities.isNotEmpty) {
-          _selectedCommunityId = _approvedCommunities.first['communities']['id'].toString();
+
+        final validIds = <String>{};
+        for (final item in _approvedCommunities) {
+          final comm = item['communities'];
+          if (comm is Map && comm['id'] != null) {
+            validIds.add(comm['id'].toString());
+          }
+        }
+
+        if (_selectedCommunityId == null ||
+            !validIds.contains(_selectedCommunityId)) {
+          if (_approvedCommunities.isNotEmpty) {
+            final firstComm = _approvedCommunities.first['communities'];
+            _selectedCommunityId =
+                firstComm is Map ? firstComm['id'].toString() : null;
+          } else {
+            _selectedCommunityId = null;
+          }
         }
       });
     } catch (e) {
       debugPrint('Error al cargar comunidades para publicar: $e');
-      setState(() => _isLoadingCommunities = false);
+      if (mounted) {
+        setState(() {
+          _approvedCommunities = [];
+          _selectedCommunityId = null;
+          _isLoadingCommunities = false;
+        });
+      }
     }
   }
 
@@ -100,7 +152,7 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(const Duration(days: 90)),
     );
-    if (picked != null) {
+    if (picked != null && mounted) {
       setState(() => _selectedDate = picked);
     }
   }
@@ -110,7 +162,7 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
       context: context,
       initialTime: _selectedTime ?? TimeOfDay.now(),
     );
-    if (picked != null) {
+    if (picked != null && mounted) {
       setState(() => _selectedTime = picked);
     }
   }
@@ -125,10 +177,21 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
     final vehicleColor = _vehicleColorController.text.trim();
     final tripNotes = _tripNotesController.text.trim();
 
-    if (_selectedCommunityId == null) {
+    final validIds = <String>{};
+    for (final item in _approvedCommunities) {
+      final comm = item['communities'];
+      if (comm is Map && comm['id'] != null) {
+        validIds.add(comm['id'].toString());
+      }
+    }
+
+    if (_selectedCommunityId == null ||
+        !validIds.contains(_selectedCommunityId)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Debes seleccionar una comunidad válida para publicar.'),
+          content: Text(
+            'Debes seleccionar una comunidad activa para publicar.',
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -146,7 +209,9 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
         _selectedTime == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Por favor completa todos los campos obligatorios (incluyendo marca y color).'),
+          content: Text(
+            'Por favor completa todos los campos obligatorios (incluyendo marca y color).',
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -155,7 +220,6 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
 
     final seats = int.tryParse(seatsStr);
     final totalCost = double.tryParse(costStr);
-
     if (seats == null || seats <= 0 || totalCost == null || totalCost < 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -206,7 +270,11 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(_isEditing ? '¡Viaje actualizado con éxito!' : '¡Viaje publicado con éxito!'),
+          content: Text(
+            _isEditing
+                ? '¡Viaje actualizado con éxito!'
+                : '¡Viaje publicado con éxito!',
+          ),
           backgroundColor: Colors.teal,
         ),
       );
@@ -234,7 +302,6 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
     final timeText = _selectedTime == null
         ? 'Seleccionar Hora'
         : _selectedTime!.format(context);
-
     final seats = int.tryParse(_seatsController.text) ?? 1;
     final totalCost = double.tryParse(_costController.text) ?? 0.0;
     final costPerPerson = seats > 0 ? (totalCost / seats) : 0.0;
@@ -253,7 +320,9 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    _isEditing ? 'Modificar Detalles del Viaje' : 'Detalles de la Ruta y Gasto Compartido',
+                    _isEditing
+                        ? 'Modificar Detalles del Viaje'
+                        : 'Detalles de la Ruta y Gasto Compartido',
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -261,8 +330,6 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  
-                  // --- SECCIÓN: SELECTOR DE COMUNIDAD
                   if (_approvedCommunities.isEmpty) ...[
                     Container(
                       padding: const EdgeInsets.all(12),
@@ -272,28 +339,33 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
                         border: Border.all(color: Colors.orange),
                       ),
                       child: const Text(
-                        'No perteneces à ninguna comunidad aprobada. Debes unirte o crear una para publicar viajes.',
-                        style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold),
+                        'No perteneces a ninguna comunidad activa aprobada. Debes unirte o activar/crear una comunidad para publicar viajes.',
+                        style: TextStyle(
+                          color: Colors.orange,
+                          fontWeight: FontWeight.bold,
+                        ),
                         textAlign: TextAlign.center,
                       ),
                     ),
                     const SizedBox(height: 16),
                   ] else ...[
                     DropdownButtonFormField<String>(
+                      key: ValueKey(_selectedCommunityId),
                       initialValue: _selectedCommunityId,
-                      isExpanded: true, // <-- Solución al right overflowed en Android
+                      isExpanded: true,
                       decoration: const InputDecoration(
                         labelText: 'Seleccionar Comunidad *',
                         prefixIcon: Icon(Icons.group, color: Colors.teal),
                         border: OutlineInputBorder(),
                       ),
-                      items: _approvedCommunities.map<DropdownMenuItem<String>>((item) {
+                      items: _approvedCommunities
+                          .map<DropdownMenuItem<String>>((item) {
                         final comm = item['communities'] ?? {};
                         final commName = comm['name'] ?? 'Comunidad';
                         return DropdownMenuItem<String>(
                           value: comm['id'].toString(),
                           child: Text(
-                            commName,
+                            commName.toString(),
                             overflow: TextOverflow.ellipsis,
                             maxLines: 1,
                           ),
@@ -307,7 +379,6 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
                     ),
                     const SizedBox(height: 16),
                   ],
-
                   TextField(
                     controller: _originController,
                     decoration: const InputDecoration(
@@ -340,7 +411,10 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
                       Expanded(
                         child: OutlinedButton.icon(
                           onPressed: _pickDate,
-                          icon: const Icon(Icons.calendar_month, color: Colors.teal),
+                          icon: const Icon(
+                            Icons.calendar_month,
+                            color: Colors.teal,
+                          ),
                           label: Text(dateText),
                           style: OutlinedButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 16),
@@ -351,7 +425,10 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
                       Expanded(
                         child: OutlinedButton.icon(
                           onPressed: _pickTime,
-                          icon: const Icon(Icons.access_time, color: Colors.teal),
+                          icon: const Icon(
+                            Icons.access_time,
+                            color: Colors.teal,
+                          ),
                           label: Text(timeText),
                           style: OutlinedButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 16),
@@ -378,7 +455,10 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
                     onChanged: (_) => setState(() {}),
                     decoration: const InputDecoration(
                       labelText: 'Gasto Total Estimado (\$)',
-                      prefixIcon: Icon(Icons.monetization_on_outlined, color: Colors.teal),
+                      prefixIcon: Icon(
+                        Icons.monetization_on_outlined,
+                        color: Colors.teal,
+                      ),
                       border: OutlineInputBorder(),
                     ),
                   ),
@@ -423,7 +503,8 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
                     controller: _tripNotesController,
                     maxLines: 3,
                     decoration: const InputDecoration(
-                      labelText: 'Observaciones (Equipaje, música, tolerancia de espera...)',
+                      labelText:
+                          'Observaciones (Equipaje, música, tolerancia de espera...)',
                       prefixIcon: Icon(Icons.note_alt, color: Colors.teal),
                       border: OutlineInputBorder(),
                     ),
@@ -452,11 +533,18 @@ class _PublishTripScreenState extends State<PublishTripScreen> {
                           child: CircularProgressIndicator(color: Colors.teal),
                         )
                       : ElevatedButton.icon(
-                          onPressed: _approvedCommunities.isEmpty ? null : _saveTrip,
-                          icon: Icon(_isEditing ? Icons.save : Icons.send_rounded, color: Colors.white),
+                          onPressed:
+                              _approvedCommunities.isEmpty ? null : _saveTrip,
+                          icon: Icon(
+                            _isEditing ? Icons.save : Icons.send_rounded,
+                            color: Colors.white,
+                          ),
                           label: Text(
                             _isEditing ? 'Guardar Cambios' : 'Publicar Viaje',
-                            style: const TextStyle(fontSize: 16, color: Colors.white),
+                            style: const TextStyle(
+                              fontSize: 16,
+                              color: Colors.white,
+                            ),
                           ),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.orange.shade800,

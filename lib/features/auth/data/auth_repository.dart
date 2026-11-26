@@ -3,7 +3,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class AuthRepository {
   final SupabaseClient _supabase = Supabase.instance.client;
 
-  // Registrar usuario pasando datos adicionales a la metadata, constancia de políticas y calificación inicial de 5.0
+  // Registrar usuario pasando datos adicionales a la metadata, constancia de políticas y
+  // calificación inicial de 5.0
   Future<AuthResponse> signUp({
     required String email,
     required String password,
@@ -21,8 +22,8 @@ class AuthRepository {
         'is_driver': isDriver,
         'data_privacy_accepted': dataPrivacyAccepted,
         'privacy_accepted_at': DateTime.now().toIso8601String(),
-        'rating': 5.0,       // Calificación inicial por defecto
-        'total_ratings': 0,  // Conteo inicial de calificaciones
+        'rating': 5.0,
+        'total_ratings': 0,
       },
     );
   }
